@@ -1,0 +1,42 @@
+cd /workspaces/previsao_sofascore/backend
+python -m pip install -r requirements.txt
+
+
+
+
+# Remover completamente
+pip uninstall playwright -y
+pip uninstall playwright-python -y
+
+# Limpar cache do pip
+pip cache purge
+
+# Reinstalar
+pip install playwright
+playwright install
+
+
+
+/workspaces/previsao_sofascore/frontend/run_frontend.sh
+
+
+streamlit run app.py
+
+##################
+
+chmod +x scripts/run_once.sh
+./scripts/run_once.sh
+
+
+chmod +x scripts/run_all.sh
+./scripts/run_all.sh
+
+
+# Executar a cada 10 minutos
+python scripts/scheduler.py --continuous --interval 10
+
+# Executar apenas 3 ciclos
+python scripts/scheduler.py --cycles 3 --interval 5
+
+# Executar com delay inicial
+python scripts/scheduler.py --continuous --interval 5 --start-delay 60

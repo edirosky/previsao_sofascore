@@ -20,6 +20,14 @@ playwright install
 /workspaces/previsao_sofascore/frontend/run_frontend.sh
 
 
+
+chmod +x frontend/run_frontend.sh
+./frontend/run_frontend.sh
+
+
+
+
+
 streamlit run app.py
 
 ##################
@@ -40,3 +48,18 @@ python scripts/scheduler.py --cycles 3 --interval 5
 
 # Executar com delay inicial
 python scripts/scheduler.py --continuous --interval 5 --start-delay 60
+
+
+
+
+
+
+
+
+# Verifique primeiro o que será eliminado
+ls -la /workspaces/previsao_sofascore/data/*.csv
+ls -la /workspaces/previsao_sofascore/data/*.xlsx
+
+# Depois elimine
+cd /workspaces/previsao_sofascore
+rm data/*.csv data/*.xlsx 2>/dev/null || echo "Alguns arquivos não existiam"

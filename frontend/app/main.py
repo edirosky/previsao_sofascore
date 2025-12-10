@@ -1301,7 +1301,7 @@ def display_about_tab():
 def main():
     """Função principal da aplicação"""
     
-    # Inicializar session state
+    # Inicializar session state para show_charts
     if 'show_charts' not in st.session_state:
         st.session_state.show_charts = True
     
@@ -1354,13 +1354,14 @@ def main():
     # Métricas principais
     display_metrics_summary(filtered_data)
     
-    # Controle de gráficos
+    # Controle de gráficos - CORRIGIDO: usando st.session_state diretamente
     col1, col2 = st.columns([4, 1])
     with col1:
         st.markdown(f"### 📊 Jogos Filtrados: {len(filtered_data)}")
     with col2:
-        show_charts = st.checkbox("📈 Mostrar Gráficos", value=st.session_state.show_charts)
-        st.session_state.show_charts = show_charts
+        show_charts = st.checkbox("📈 Mostrar Gráficos", value=st.session_state.get('show_charts', True))
+        if show_charts != st.session_state.get('show_charts'):
+            st.session_state.show_charts = show_charts
     
     # Abas principais
     tab1, tab2, tab3, tab4 = st.tabs(["🔥 Live", "✅ Terminados", "📈 Análises", "ℹ️ Sobre"])

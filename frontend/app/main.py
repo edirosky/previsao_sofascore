@@ -40,7 +40,7 @@ st.set_page_config(
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Configurações
-CONFIG_FILE = Path("//workspaces/previsao_sofascore/frontend/app/config.json")
+CONFIG_FILE = Path("/workspaces/previsao_sofascore/frontend/app/config.json")
 if CONFIG_FILE.exists():
     try:
         with open(CONFIG_FILE, 'r') as f:

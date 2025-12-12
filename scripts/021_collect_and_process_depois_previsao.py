@@ -198,7 +198,7 @@ async def coletar_eventos_playwright(numero_de_dias: int = NUMBER_OF_DAYS) -> Li
                         if not cond:
                             continue
                         d = processar_evento(evento, current_date)
-                        if d and d["Status"] not in ["not started","ended","postponed","canceled","walkover","abandoned","retired"]:
+                        if d and d["Status"] not in ["not started","postponed","canceled","walkover","abandoned","retired"]:
                             passed.append(d)
                     logging.info("Date %s: total=%d, passed=%d", current_date, len(eventos_brutos), len(passed))
                     todos_eventos.extend(passed)

@@ -32,7 +32,7 @@ from playwright.async_api import async_playwright, BrowserContext, APIRequestCon
 from camoufox.async_api import AsyncCamoufox
 
 # ---------- Config ----------
-ROOT = Path('./data')
+ROOT = Path('./scripts/data')
 ROOT.mkdir(parents=True, exist_ok=True)
 
 BASE = ROOT / 'playwright_jsons_full'

@@ -14,7 +14,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Configurações de caminhos
-BASE = Path('/workspaces/previsao_sofascore/data')
+BASE = Path('/workspaces/previsao_sofascore/scripts/data')
 JSONS_DIR = BASE / 'playwright_jsons_full'
 TODAY_FOLDER = BASE
 TODAY_FOLDER.mkdir(parents=True, exist_ok=True)

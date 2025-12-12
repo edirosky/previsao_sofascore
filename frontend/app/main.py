@@ -1,6 +1,7 @@
-# ⚽ Frontend Streamlit para Previsões SofaScore - VERSÃO COMPLETA COM GRÁFICOS MATPLOTLIB
+# ⚽ Frontend Streamlit para Previsões SofaScore - VERSÃO COMPLETA COM GRÁFICOS MATPLOTLIB E SCHEDULER
 # Mantém TODAS as funcionalidades: filtros, análises, métricas, etc.
 # Adiciona gráficos matplotlib para momentum com suporte a tempo real
+# Inclui scheduler interno para atualização automática
 
 import streamlit as st
 import pandas as pd
@@ -21,6 +22,11 @@ matplotlib.use('Agg')  # Backend não-interativo para produção
 import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
+import subprocess
+import time
+import threading
+import queue
+import json
 
 # Configuração da página - DEVE SER A PRIMEIRA COISA
 st.set_page_config(
@@ -32,6 +38,21 @@ st.set_page_config(
 
 # Adicionar caminho para importações
 sys.path.append(str(Path(__file__).parent.parent))
+
+# Configurações
+CONFIG_FILE = Path("/workspaces/previsao_sofascore/config.json")
+if CONFIG_FILE.exists():
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+    except:
+        config = {"admin_password": "admin123"}
+else:
+    config = {"admin_password": "admin123"}
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+
+ADMIN_PASSWORD = config.get("admin_password", "admin123")
 
 # CSS customizado corrigido
 st.markdown("""
@@ -55,16 +76,73 @@ st.markdown("""
         z-index: 100;
     }
     
+    /* Container para métricas horizontais */
+    .metrics-horizontal-container {
+        background: white;
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        border: 1px solid #e2e8f0;
+    }
+    
+    /* Métricas horizontais */
+    .horizontal-metric-item {
+        text-align: center;
+        padding: 0.5rem;
+    }
+    
+    .horizontal-metric-value {
+        font-size: 2.2rem;
+        font-weight: bold;
+        color: #1e40af;
+        margin-bottom: 0.3rem;
+        line-height: 1;
+    }
+    
+    .horizontal-metric-label {
+        font-size: 0.85rem;
+        color: #6b7280;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }
+    
     /* Cards de métricas */
     .metric-card {
         background: white;
-        padding: 1rem;
+        padding: 0.8rem;
         border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         border-left: 4px solid #3B82F6;
         margin-bottom: 0.5rem;
         position: relative;
         z-index: 50;
+        height: 100%;
+    }
+    
+    /* Cards compactos de métricas */
+    .compact-metric {
+        background: white;
+        padding: 0.6rem;
+        border-radius: 6px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        text-align: center;
+        height: 100%;
+    }
+    
+    .compact-metric-value {
+        font-size: 1.4rem;
+        font-weight: bold;
+        color: #1e40af;
+        margin-bottom: 0.2rem;
+    }
+    
+    .compact-metric-label {
+        font-size: 0.8rem;
+        color: #6b7280;
+        text-transform: uppercase;
+        font-weight: 600;
     }
     
     /* Cards de jogos */
@@ -87,6 +165,37 @@ st.markdown("""
         border-radius: 8px;
         margin: 1rem 0;
         border: 1px solid #B2EBF2;
+    }
+    
+    /* Container para scheduler */
+    .scheduler-container {
+        background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%) !important;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+        border: 2px solid #667eea;
+    }
+    
+    /* Barra de progresso customizada */
+    .progress-container {
+        width: 100%;
+        background-color: #e0e0e0;
+        border-radius: 10px;
+        overflow: hidden;
+        margin: 10px 0;
+    }
+    
+    .progress-bar {
+        height: 20px;
+        background: linear-gradient(90deg, #4CAF50, #8BC34A);
+        width: 0%;
+        border-radius: 10px;
+        transition: width 0.3s ease;
+        text-align: center;
+        color: white;
+        line-height: 20px;
+        font-weight: bold;
+        font-size: 12px;
     }
     
     /* Cores de confiança */
@@ -220,8 +329,185 @@ st.markdown("""
         position: relative;
         z-index: 10 !important;
     }
+    
+    /* Estilo para info do jogo compacta */
+    .game-info-compact {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    
+    /* Título das métricas */
+    .metrics-title {
+        font-size: 1.2rem;
+        font-weight: bold;
+        color: #1e40af;
+        margin-bottom: 1rem;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ========== CLASSE SCHEDULER ==========
+
+class SchedulerService:
+    """Serviço de scheduler para executar scripts periodicamente"""
+    
+    def __init__(self, interval_minutes=1):
+        self.interval_minutes = interval_minutes
+        self.is_running = False
+        self.current_cycle = 0
+        self.last_run = None
+        self.next_run = None
+        self.status_queue = queue.Queue()
+        self.progress = 0
+        self.current_script = ""
+        
+        # Definir caminho correto para scripts
+        self.scripts_dir = Path("/workspaces/previsao_sofascore/scripts")
+        self.data_dir = Path("/workspaces/previsao_sofascore/data")
+        
+        # Scripts com seus nomes corretos
+        self.scripts = [
+            ("010_collect_and_process.py", "Coleta de eventos", 600),
+            ("011_reprocess_goals.py", "Reprocessamento de gols", 300),
+            ("012_criar_incidentes_estatisticas_geral.py", "Criação de incidentes", 300),
+            ("020_carregar_modelos.py", "Carregamento de modelos", 300),
+            ("021_collect_and_process_depois_previsao.py", "Processamento pós-previsão", 60),
+            ("030_reprocessar_golos_com_registro_efetivo_refactor.py", "Reprocessamento com registro", 300),
+            ("031_patch_simples_tipo_status.py", "Patch de status", 300),
+            ("040_analise_metricas_confianca.py", "Análise de métricas", 300),
+            ("041_dados_pontos_geral.py", "Dados de pontos", 300)
+        ]
+        
+        self.total_scripts = len(self.scripts)
+        self.thread = None
+    
+    def run_script(self, script_name, description, timeout):
+        """Executa um script Python"""
+        try:
+            self.current_script = description
+            self.status_queue.put(f"▶️ Executando: {description}")
+            
+            script_path = self.scripts_dir / script_name
+            
+            if not script_path.exists():
+                self.status_queue.put(f"❌ Script não encontrado: {script_name} em {script_path}")
+                return False
+            
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=self.scripts_dir  # Executar no diretório correto
+            )
+            
+            if result.returncode == 0:
+                self.status_queue.put(f"✅ {description} concluído")
+                return True
+            else:
+                error_msg = result.stderr[:100] if result.stderr else "Sem mensagem de erro"
+                self.status_queue.put(f"❌ {description} falhou: {error_msg}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            self.status_queue.put(f"⏰ {description} timeout após {timeout}s")
+            return False
+        except Exception as e:
+            self.status_queue.put(f"⚠️ Erro em {description}: {str(e)[:100]}")
+            return False
+    
+    def run_cycle(self):
+        """Executa um ciclo completo de scripts"""
+        self.current_cycle += 1
+        self.last_run = datetime.now()
+        self.next_run = self.last_run + timedelta(minutes=self.interval_minutes)
+        
+        self.status_queue.put(f"🔄 Iniciando ciclo #{self.current_cycle}")
+        self.status_queue.put(f"⏰ Hora de início: {self.last_run.strftime('%H:%M:%S')}")
+        
+        success_count = 0
+        script_index = 0
+        
+        for script_name, description, timeout in self.scripts:
+            script_index += 1
+            self.progress = (script_index / self.total_scripts) * 100
+            
+            # Atualizar progresso
+            self.status_queue.put(f"📊 PROGRESS:{self.progress}")
+            
+            # Executar script
+            if self.run_script(script_name, description, timeout):
+                success_count += 1
+            
+            # Pequena pausa entre scripts
+            time.sleep(2)
+        
+        # Aguardar estabilização
+        self.status_queue.put("⏳ Aguardando estabilização...")
+        time.sleep(5)
+        
+        self.progress = 100
+        self.status_queue.put(f"📊 PROGRESS:{self.progress}")
+        
+        success_rate = (success_count / self.total_scripts) * 100
+        self.status_queue.put(f"🎯 Ciclo #{self.current_cycle} concluído: {success_count}/{self.total_scripts} scripts ({success_rate:.1f}%)")
+        self.status_queue.put(f"⏰ Próximo ciclo: {self.next_run.strftime('%H:%M:%S')}")
+        
+        return success_count
+    
+    def scheduler_loop(self):
+        """Loop principal do scheduler"""
+        while self.is_running:
+            try:
+                self.run_cycle()
+                
+                # Calcular tempo para próximo ciclo
+                wait_seconds = self.interval_minutes * 60
+                for i in range(wait_seconds):
+                    if not self.is_running:
+                        break
+                    
+                    # Atualizar tempo restante
+                    remaining = wait_seconds - i
+                    if remaining % 10 == 0:  # Atualizar a cada 10 segundos
+                        self.status_queue.put(f"⏳ Aguardando próximo ciclo: {remaining}s restantes")
+                    
+                    time.sleep(1)
+                    
+            except Exception as e:
+                self.status_queue.put(f"💥 Erro no scheduler: {str(e)}")
+                time.sleep(10)  # Espera antes de tentar novamente
+    
+    def start(self):
+        """Inicia o scheduler em uma thread separada"""
+        if not self.is_running:
+            self.is_running = True
+            self.thread = threading.Thread(target=self.scheduler_loop, daemon=True)
+            self.thread.start()
+            self.status_queue.put("🚀 Scheduler iniciado")
+    
+    def stop(self):
+        """Para o scheduler"""
+        self.is_running = False
+        if self.thread:
+            self.thread.join(timeout=5)
+        self.status_queue.put("🛑 Scheduler parado")
+    
+    def get_status(self):
+        """Obtém o status atual do scheduler"""
+        status_messages = []
+        while not self.status_queue.empty():
+            try:
+                message = self.status_queue.get_nowait()
+                status_messages.append(message)
+            except:
+                break
+        
+        return status_messages
 
 # ========== FUNÇÕES DE GRÁFICOS MATPLOTLIB ==========
 
@@ -319,7 +605,6 @@ def get_momentum_data(game_id, df_pontos):
         return pontos
 
     except Exception as e:
-        st.error(f"Erro ao obter momentum: {str(e)}")
         return []
 
 def create_matplotlib_momentum_chart(game_id, time_home, time_away, momentum_data, 
@@ -454,11 +739,10 @@ def create_matplotlib_momentum_chart(game_id, time_home, time_away, momentum_dat
         return f'<img src="data:image/png;base64,{img_base64}" class="matplotlib-graph"/>'
         
     except Exception as e:
-        st.error(f"Erro ao criar gráfico matplotlib: {str(e)}")
         plt.close('all')
         return None
 
-# ========== FUNÇÕES AUXILIARES (mantidas do original) ==========
+# ========== FUNÇÕES AUXILIARES ==========
 
 def clean_team_name_for_url(name: str, to_lower: bool = False, max_len: int | None = None) -> str:
     """Normaliza um nome para uso em URLs"""
@@ -511,7 +795,7 @@ class DataManager:
     """Gerencia o carregamento e processamento dos dados"""
     
     def __init__(self):
-        self.base_dir = Path(__file__).parent.parent.parent
+        self.base_dir = Path("/workspaces/previsao_sofascore")
         self.data_path = self.base_dir / "data" / "df_previsoes_sim_concatenado.csv"
         self.pontos_path = self.base_dir / "data" / "dados_pontos_geral.csv"
         self.data = None
@@ -621,49 +905,248 @@ class DataManager:
 
 # ========== FUNÇÕES DE VISUALIZAÇÃO ==========
 
+def display_horizontal_metrics(data):
+    """Exibe métricas na horizontal com design moderno"""
+    if data.empty:
+        st.info("📭 Sem dados para exibir métricas")
+        return
+    
+    st.markdown('<div class="metrics-horizontal-container">', unsafe_allow_html=True)
+    
+    # Título
+    st.markdown('<div class="metrics-title">📊 RESUMO ESTATÍSTICO</div>', unsafe_allow_html=True)
+    
+    # Criar 6 colunas (TOTAL + 5 métricas)
+    cols = st.columns(6)
+    
+    # Total de Jogos
+    with cols[0]:
+        total = len(data)
+        st.markdown(f"""
+        <div class="horizontal-metric-item">
+            <div class="horizontal-metric-value">{total}</div>
+            <div class="horizontal-metric-label">TOTAL JOGOS</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Green
+    with cols[1]:
+        if 'Estado_Previsao_Geral' in data.columns:
+            green = (data['Estado_Previsao_Geral'] == 'green').sum()
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value" style="color: #10B981;">{green}</div>
+                <div class="horizontal-metric-label">GREEN</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value">0</div>
+                <div class="horizontal-metric-label">GREEN</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Red
+    with cols[2]:
+        if 'Estado_Previsao_Geral' in data.columns:
+            red = (data['Estado_Previsao_Geral'] == 'red').sum()
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value" style="color: #EF4444;">{red}</div>
+                <div class="horizontal-metric-label">RED</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value">0</div>
+                <div class="horizontal-metric-label">RED</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Pendente
+    with cols[3]:
+        if 'Estado_Previsao_Geral' in data.columns:
+            pendente = (data['Estado_Previsao_Geral'] == 'pendente').sum()
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value" style="color: #6B7280;">{pendente}</div>
+                <div class="horizontal-metric-label">PENDENTE</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value">0</div>
+                <div class="horizontal-metric-label">PENDENTE</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Consenso Sim
+    with cols[4]:
+        if 'previsao_consensual_ajustada' in data.columns:
+            consenso_sim = (data['previsao_consensual_ajustada'] == 'Sim').sum()
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value" style="color: #3B82F6;">{consenso_sim}</div>
+                <div class="horizontal-metric-label">CONSENSO SIM</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value">0</div>
+                <div class="horizontal-metric-label">CONSENSO SIM</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Live (adicional)
+    with cols[5]:
+        if 'Tipo_Status_depois_previsao' in data.columns:
+            live = (data['Tipo_Status_depois_previsao'] == 'inprogress').sum()
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value" style="color: #F59E0B;">{live}</div>
+                <div class="horizontal-metric-label">LIVE AGORA</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="horizontal-metric-item">
+                <div class="horizontal-metric-value">0</div>
+                <div class="horizontal-metric-label">LIVE AGORA</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+def display_scheduler_status(admin_mode=False):
+    """Exibe o status do scheduler (apenas para admin)"""
+    if not admin_mode:
+        return
+    
+    st.markdown('<div class="scheduler-container">', unsafe_allow_html=True)
+    
+    st.markdown("### ⚙️ Scheduler de Atualização (Admin)")
+    
+    # Inicializar scheduler no session_state
+    if 'scheduler' not in st.session_state:
+        st.session_state.scheduler = SchedulerService(interval_minutes=1)
+        st.session_state.scheduler.start()
+    
+    scheduler = st.session_state.scheduler
+    
+    # Controles do scheduler
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if scheduler.is_running:
+            st.markdown("**Status:** 🟢 **ATIVO**")
+        else:
+            st.markdown("**Status:** 🔴 **INATIVO**")
+    
+    with col2:
+        st.markdown(f"**Ciclo atual:** #{scheduler.current_cycle}")
+    
+    with col3:
+        if scheduler.last_run:
+            st.markdown(f"**Última execução:** {scheduler.last_run.strftime('%H:%M:%S')}")
+    
+    # Barra de progresso
+    st.markdown(f"**Progresso do ciclo atual:**")
+    
+    progress_html = f"""
+    <div class="progress-container">
+        <div class="progress-bar" style="width: {scheduler.progress}%">
+            {scheduler.progress:.1f}%
+        </div>
+    </div>
+    """
+    st.markdown(progress_html, unsafe_allow_html=True)
+    
+    if scheduler.current_script:
+        st.markdown(f"**Executando:** {scheduler.current_script}")
+    
+    # Status messages
+    st.markdown("**Logs:**")
+    status_messages = scheduler.get_status()
+    
+    status_container = st.container()
+    with status_container:
+        for message in status_messages[-10:]:  # Mostrar apenas as últimas 10 mensagens
+            if message.startswith("📊 PROGRESS:"):
+                continue  # Ignorar mensagens de progresso (já tratadas)
+            st.text(message)
+    
+    # Controles (apenas admin)
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🔄 Forçar Atualização", use_container_width=True, key="force_update_admin"):
+            scheduler.status_queue.put("🔄 Ciclo forçado solicitado...")
+            # Executar ciclo em thread separada
+            threading.Thread(target=scheduler.run_cycle, daemon=True).start()
+    
+    with col2:
+        if scheduler.is_running:
+            if st.button("⏸️ Pausar Scheduler", use_container_width=True, key="pause_scheduler"):
+                scheduler.stop()
+                st.rerun()
+        else:
+            if st.button("▶️ Iniciar Scheduler", use_container_width=True, key="start_scheduler"):
+                scheduler.start()
+                st.rerun()
+    
+    with col3:
+        if st.button("🗑️ Limpar Logs", use_container_width=True, key="clear_logs"):
+            # Limpar a fila de status
+            while not scheduler.status_queue.empty():
+                scheduler.status_queue.get_nowait()
+            st.rerun()
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
 def display_header():
     """Exibe o cabeçalho da aplicação"""
-    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+    col1, col2, col3 = st.columns([3, 1, 1])
     
     with col1:
         st.markdown('<div class="main-header">', unsafe_allow_html=True)
         st.markdown('<h1 style="margin-bottom: 0.5rem;">⚽ Previsões SofaScore</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="margin: 0;">Sistema Inteligente de Previsão de Futebol - Análise em Tempo Real</p>', unsafe_allow_html=True)
+        st.markdown('<p style="margin: 0;">Sistema Inteligente de Previsão de Futebol - Atualização Automática</p>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
         st.write("")
         st.write("")
-        atualizar = st.button("🔄 Atualizar", use_container_width=True)
+        atualizar = st.button("🔄 Atualizar Dados", use_container_width=True, help="Atualiza apenas a visualização")
         if atualizar:
             st.rerun()
     
     with col3:
         st.write("")
         st.write("")
-        # Timezones
-        timezones = get_current_timezones()
-        st.markdown(f"""
-        <div style="background: #f8fafc; padding: 8px; border-radius: 5px;">
-            <div style="font-size: 0.8rem; color: #64748b;">Horários:</div>
-            <div class="timezone-badge">UTC: {timezones['UTC']}</div>
-            <div class="timezone-badge">UTC-1: {timezones['UTC-1']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        st.write("")
-        st.write("")
         agora = datetime.now().strftime('%H:%M')
         st.metric("Hora Local", agora)
 
-def display_sidebar(data_manager):
+def display_sidebar(data_manager, admin_mode=False):
     """Cria a sidebar com filtros e informações"""
     with st.sidebar:
         st.markdown("## ⚙️ Configurações")
         
+        # Modo Admin
+        if admin_mode:
+            display_scheduler_status(admin_mode=True)
+        else:
+            # Para usuários normais, mostrar apenas status básico
+            if 'scheduler' in st.session_state:
+                scheduler = st.session_state.scheduler
+                if scheduler.last_run:
+                    st.caption(f"📅 Última atualização: {scheduler.last_run.strftime('%H:%M:%S')}")
+        
         # Informações do sistema
-        st.markdown("### 📊 Estatísticas")
+        st.markdown("### 📊 Estatísticas Rápidas")
         if data_manager.data is not None and not data_manager.data.empty:
             total_jogos = len(data_manager.data)
             
@@ -671,12 +1154,8 @@ def display_sidebar(data_manager):
                 live_jogos = len(data_manager.data[
                     data_manager.data['Tipo_Status_depois_previsao'] == 'inprogress'
                 ])
-                finalizados = len(data_manager.data[
-                    data_manager.data['Tipo_Status_depois_previsao'].isin(['ended', 'finished', 'ft'])
-                ])
             else:
                 live_jogos = 0
-                finalizados = 0
             
             col1, col2 = st.columns(2)
             with col1:
@@ -734,9 +1213,9 @@ def display_sidebar(data_manager):
         
         with st.expander("Ver estados"):
             st.markdown("""
-            - **🟢 green**: Previsão correta
-            - **🔴 red**: Previsão incorreta  
-            - **⚪ pendente**: Aguardando resultado
+            - **🟢 GREEN**: Previsão correta
+            - **🔴 RED**: Previsão incorreta  
+            - **⚪ PENDENTE**: Aguardando resultado
             """)
         
         with st.expander("Ver confiança"):
@@ -776,46 +1255,13 @@ def apply_filters(data, filters):
     
     return filtered
 
-def display_metrics_summary(data):
-    """Exibe resumo de métricas"""
-    if data.empty:
-        return
-    
-    st.markdown("### 📊 Resumo Estatístico")
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        total = len(data)
-        st.metric("Total Jogos", total)
-    
-    with col2:
-        if 'Estado_Previsao_Geral' in data.columns:
-            green = (data['Estado_Previsao_Geral'] == 'green').sum()
-            st.metric("Green", green)
-    
-    with col3:
-        if 'Estado_Previsao_Geral' in data.columns:
-            red = (data['Estado_Previsao_Geral'] == 'red').sum()
-            st.metric("Red", red)
-    
-    with col4:
-        if 'Estado_Previsao_Geral' in data.columns:
-            pendente = (data['Estado_Previsao_Geral'] == 'pendente').sum()
-            st.metric("Pendente", pendente)
-    
-    with col5:
-        if 'previsao_consensual_ajustada' in data.columns:
-            consenso_sim = (data['previsao_consensual_ajustada'] == 'Sim').sum()
-            st.metric("Consenso Sim", consenso_sim)
-
-def display_game_card(row, data_manager, show_chart=True):
-    """Exibe um card individual para o jogo"""
+def display_compact_game_card(row, data_manager, show_chart=True):
+    """Exibe um card compacto para o jogo"""
     with st.container():
         st.markdown('<div class="game-card">', unsafe_allow_html=True)
         
-        # Linha 1: Cabeçalho do jogo
-        col1, col2, col3 = st.columns([4, 2, 1])
+        # Linha 1: Cabeçalho compacto
+        col1, col2, col3, col4 = st.columns([4, 1, 1, 1])
         
         with col1:
             home = row.get('Time_Home', 'N/A')
@@ -823,16 +1269,16 @@ def display_game_card(row, data_manager, show_chart=True):
             torneio = row.get('Torneio', '')
             
             st.markdown(f"**{home}** vs **{away}**")
-            st.caption(f"🎯 {torneio} • {row.get('Data_Hora', '')}")
+            st.caption(f"🎯 {torneio} | {row.get('Data_Hora', '')}")
         
         with col2:
             estado = row.get('Estado_Previsao_Geral', 'pendente')
             if estado == 'green':
-                st.markdown('<span class="estado-green">✅ GREEN</span>', unsafe_allow_html=True)
+                st.markdown('<span class="estado-green">✅</span>', unsafe_allow_html=True)
             elif estado == 'red':
-                st.markdown('<span class="estado-red">❌ RED</span>', unsafe_allow_html=True)
+                st.markdown('<span class="estado-red">❌</span>', unsafe_allow_html=True)
             else:
-                st.markdown('<span class="estado-pendente">⏳ PENDENTE</span>', unsafe_allow_html=True)
+                st.markdown('<span class="estado-pendente">⏳</span>', unsafe_allow_html=True)
         
         with col3:
             confianca = row.get('nivel_confianca_ajustado', '')
@@ -845,68 +1291,65 @@ def display_game_card(row, data_manager, show_chart=True):
             else:
                 st.markdown('<span class="confidence-very-low">⚪</span>', unsafe_allow_html=True)
         
-        # Linha 2: Dados do jogo
+        with col4:
+            consenso = row.get('previsao_consensual_ajustada', 'Não')
+            if consenso == 'Sim':
+                st.markdown("✅")
+            else:
+                st.markdown("❌")
+        
+        # Linha 2: Dados do jogo compactos
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             placar_ht = row.get('PLACAR_HT', '0-0')
-            st.metric("HT", placar_ht, delta=None)
+            st.markdown(f"**HT**")
+            st.markdown(f"`{placar_ht}`")
         
         with col2:
             placar_ft = row.get('PLACAR_FT', '0-0')
             placar_depois = row.get('Placar_depois_previsao', placar_ft)
-            st.metric("FT", placar_depois, delta=None)
+            st.markdown(f"**FT**")
+            st.markdown(f"`{placar_depois}`")
         
         with col3:
             tipo_status = row.get('Tipo_Status_depois_previsao', '')
             minutos = row.get('Minutos_jogo_depois_previsao', row.get('Minutos_jogo', ''))
             
+            st.markdown(f"**Status**")
             if tipo_status == 'inprogress':
-                st.metric("Status", "LIVE", delta=None)
+                st.markdown(f"`LIVE`")
                 if minutos:
-                    st.caption(f"Minuto: {minutos}")
+                    st.caption(f"{minutos}'")
             elif tipo_status in ['ended', 'finished']:
-                st.metric("Status", "TERMINADO", delta=None)
+                st.markdown(f"`TERMINADO`")
             else:
-                st.metric("Status", tipo_status.upper(), delta=None)
+                st.markdown(f"`{tipo_status.upper()}`")
         
         with col4:
-            consenso = row.get('previsao_consensual_ajustada', 'Não')
-            if consenso == 'Sim':
-                st.metric("Consenso", "✅", delta=None)
-            else:
-                st.metric("Consenso", "❌", delta=None)
-        
-        # Linha 3: Links Bet365
-        time_home = row.get('Time_Home', '')
-        
-        if time_home not in ['', 'N/A', '0']:
-            time_home_clean = clean_team_name_for_url(time_home, to_lower=False)
-            time_home_encoded = urllib.parse.quote(time_home_clean)
-            
-            st.markdown(f"""
-            <div style="margin: 10px 0; padding: 8px; background: #f1f5f9; border-radius: 4px;">
-                <div style="font-size: 0.85rem; margin-bottom: 5px; color: #475569;">🔗 Links Bet365:</div>
-                <a href="https://www.bet365.com/#/AX/K%5E{time_home_encoded}" target="_blank" class="bet365-link">
-                    {time_home}
-                </a>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Linha 4: Gráfico de Momentum Matplotlib
-        if show_chart and data_manager.df_pontos is not None and not data_manager.df_pontos.empty:
-            game_id = str(row.get('ID_Jogo', ''))
-            momentum_data = get_momentum_data(game_id, data_manager.df_pontos)
-            evolucao_text = row.get('evolução do Placar_depois_previsao', '')
-            eventos_golos, placar_final = parse_evolucao_placar(evolucao_text)
-            
-            if momentum_data:
-                minutos_atual = row.get('Minutos_jogo_depois_previsao', '')
-                tipo_status = row.get('Tipo_Status_depois_previsao', '')
-                previsao_text = row.get("Previsao_Sim_Concatenado", "")
+            # Links Bet365 compactos
+            time_home = row.get('Time_Home', '')
+            if time_home not in ['', 'N/A', '0']:
+                time_home_clean = clean_team_name_for_url(time_home, to_lower=False)
+                time_home_encoded = urllib.parse.quote(time_home_clean)
                 
-                # Gerar gráfico matplotlib
-                with st.expander("📊 Gráfico de Momentum (Matplotlib)", expanded=True):
+                st.markdown(f"**Links**")
+                st.markdown(f'<a href="https://www.bet365.com/#/AX/K%5E{time_home_encoded}" target="_blank" class="bet365-link" style="font-size: 0.7rem; padding: 3px 6px;">Bet365</a>', unsafe_allow_html=True)
+        
+        # Detalhes expandíveis
+        with st.expander("📊 Detalhes do Jogo", expanded=False):
+            # Gráfico de Momentum (se disponível)
+            if show_chart and data_manager.df_pontos is not None and not data_manager.df_pontos.empty:
+                game_id = str(row.get('ID_Jogo', ''))
+                momentum_data = get_momentum_data(game_id, data_manager.df_pontos)
+                evolucao_text = row.get('evolução do Placar_depois_previsao', '')
+                eventos_golos, placar_final = parse_evolucao_placar(evolucao_text)
+                
+                if momentum_data:
+                    minutos_atual = row.get('Minutos_jogo_depois_previsao', '')
+                    tipo_status = row.get('Tipo_Status_depois_previsao', '')
+                    previsao_text = row.get("Previsao_Sim_Concatenado", "")
+                    
                     st.markdown('<div class="matplotlib-container">', unsafe_allow_html=True)
                     
                     chart_html = create_matplotlib_momentum_chart(
@@ -923,24 +1366,13 @@ def display_game_card(row, data_manager, show_chart=True):
                     
                     if chart_html:
                         st.markdown(chart_html, unsafe_allow_html=True)
-                    
-                    # Legenda das cores
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.markdown("🎯 **Legenda:**")
-                    with col2:
-                        st.markdown("🔵 Gol Casa")
-                    with col3:
-                        st.markdown("🟠 Gol Fora")
+                    else:
+                        st.info("Gráfico não disponível")
                     
                     st.markdown('</div>', unsafe_allow_html=True)
-            else:
-                with st.expander("📊 Gráfico de Momentum", expanded=False):
-                    st.info("Sem dados de momentum disponíveis para este jogo")
-        
-        # Linha 5: Dados ANTES da previsão
-        with st.expander("📊 Dados ANTES da previsão", expanded=False):
-            col1, col2, col3 = st.columns(3)
+            
+            # Detalhes da previsão
+            col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown("**Previsões Ativas:**")
@@ -967,51 +1399,8 @@ def display_game_card(row, data_manager, show_chart=True):
                 st.markdown("**Métricas:**")
                 concordancia = row.get('concordancia_ajustada', 'N/A')
                 score = row.get('score_confianca_ajustado', 'N/A')
-                st.markdown(f"Concordância: {concordancia}/5")
-                st.markdown(f"Score: {score}")
-            
-            with col3:
-                st.markdown("**Status Original:**")
-                st.markdown(f"Status: {row.get('Status', 'N/A')}")
-                st.markdown(f"Tipo: {row.get('Tipo_Status', 'N/A')}")
-        
-        # Linha 6: Dados DEPOIS da previsão
-        with st.expander("📈 Dados DEPOIS da previsão", expanded=False):
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.markdown("**Evolução do Placar:**")
-                evolucao = row.get('evolução do Placar_depois_previsao', 'N/A')
-                if evolucao and evolucao != 'N/A':
-                    eventos_golos, _ = parse_evolucao_placar(evolucao)
-                    if eventos_golos:
-                        for minuto, gc, gf in eventos_golos:
-                            st.markdown(f"⚽ {minuto}': {gc}-{gf}")
-                    else:
-                        st.markdown("Sem golos registrados")
-                else:
-                    st.markdown("Sem dados")
-            
-            with col2:
-                st.markdown("**Golos por tempo:**")
-                minutos_casa = row.get('minutos Golos_Casa_depois_previsao', '')
-                minutos_fora = row.get('minutos Golos_Fora_depois_previsao', '')
-                if minutos_casa:
-                    st.markdown(f"🏠 Casa: {minutos_casa}")
-                if minutos_fora:
-                    st.markdown(f"✈️ Fora: {minutos_fora}")
-            
-            with col3:
-                st.markdown("**Análise por threshold:**")
-                estado_46 = row.get('Estado_46', 'pendente')
-                golos_46 = row.get('Golos_apos_46', 0)
-                if estado_46 != '':
-                    st.markdown(f"Threshold 46': {estado_46} ({golos_46} golos)")
-        
-        # Linha 7: Análise detalhada
-        detalhes = row.get('Estado_Previsao_Detalhado', '')
-        if detalhes and detalhes != '':
-            st.caption(f"📝 {detalhes[:100]}...")
+                st.markdown(f"Concordância: `{concordancia}/5`")
+                st.markdown(f"Score: `{score}`")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1051,7 +1440,7 @@ def display_live_games(data, data_manager):
     show_charts = st.session_state.get('show_charts', True)
     
     for idx, row in live_data.iterrows():
-        display_game_card(row, data_manager, show_chart=show_charts)
+        display_compact_game_card(row, data_manager, show_chart=show_charts)
 
 def display_finished_games(data, data_manager):
     """Exibe jogos terminados"""
@@ -1074,6 +1463,9 @@ def display_finished_games(data, data_manager):
     
     st.markdown(f"### ✅ Jogos Terminados ({len(finished_data)})")
     
+    show_charts = st.session_state.get('show_charts', True)
+    
+    # Agrupar por status se disponível
     if 'Tipo_Status_depois_previsao' in finished_data.columns:
         status_groups = finished_data['Tipo_Status_depois_previsao'].unique()
         
@@ -1083,29 +1475,16 @@ def display_finished_games(data, data_manager):
                 
             group_data = finished_data[finished_data['Tipo_Status_depois_previsao'] == status]
             
-            with st.expander(f"{status.upper()} ({len(group_data)} jogos)", expanded=True):
-                if not group_data.empty:
-                    green_count = (group_data['Estado_Previsao_Geral'] == 'green').sum()
-                    red_count = (group_data['Estado_Previsao_Geral'] == 'red').sum()
-                    total_resolved = green_count + red_count
-                    
-                    if total_resolved > 0:
-                        accuracy = (green_count / total_resolved * 100)
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Acertos", green_count)
-                        with col2:
-                            st.metric("Erros", red_count)
-                        with col3:
-                            st.metric("Precisão", f"{accuracy:.1f}%")
-                
-                show_charts = st.session_state.get('show_charts', True)
-                for idx, row in group_data.iterrows():
-                    display_game_card(row, data_manager, show_chart=show_charts)
+            # Não usar expander dentro de expander - mostrar diretamente
+            st.markdown(f"#### {status.upper()} ({len(group_data)} jogos)")
+            
+            # Mostrar cards dos jogos
+            for idx, row in group_data.iterrows():
+                display_compact_game_card(row, data_manager, show_chart=show_charts)
     else:
-        show_charts = st.session_state.get('show_charts', True)
+        # Sem agrupamento por status
         for idx, row in finished_data.iterrows():
-            display_game_card(row, data_manager, show_chart=show_charts)
+            display_compact_game_card(row, data_manager, show_chart=show_charts)
 
 def display_analytics_tab(data, data_manager):
     """Exibe a aba de análises"""
@@ -1262,6 +1641,11 @@ def display_about_tab():
         - **Consenso**: Concordância entre diferentes métodos de previsão
         - **Score**: Pontuação numérica de confiança (0-100)
         
+        #### 🔄 Atualização Automática
+        
+        O sistema inclui um scheduler que executa automaticamente todos os scripts periodicamente.
+        A atualização é automática e não requer intervenção do usuário.
+        
         #### 📊 Gráficos de Momentum
         
         Os gráficos de momentum mostram a evolução do domínio do jogo ao longo dos minutos:
@@ -1276,8 +1660,9 @@ def display_about_tab():
         #### 🏆 Estatísticas Atuais
         """)
         
-        st.metric("Versão", "4.0.0")
+        st.metric("Versão", "4.3.0")
         st.metric("Última Atualização", datetime.now().strftime('%d/%m/%Y'))
+        st.metric("Modo", "Público")
         
         st.markdown("""
         #### 📞 Suporte
@@ -1288,22 +1673,38 @@ def display_about_tab():
         3. Previsões inconsistentes
         
         **Soluções:**
-        1. Verificar conexão com dados
-        2. Executar scripts de atualização
-        3. Recalibrar modelos
+        1. Aguardar próxima atualização automática
+        2. Verificar conexão com internet
+        3. Relatar ao administrador
         
         #### 🔄 Atualização
         
-        O sistema é atualizado automaticamente a cada 5 minutos.
-        Para forçar atualização, clique no botão "Atualizar".
+        O sistema é atualizado automaticamente.
+        Para suporte técnico, contate o administrador.
         """)
 
 def main():
     """Função principal da aplicação"""
     
-    # Inicializar session state para show_charts
+    # Inicializar session state
     if 'show_charts' not in st.session_state:
         st.session_state.show_charts = True
+    
+    # Inicializar scheduler (sem interface para usuário normal)
+    if 'scheduler' not in st.session_state:
+        st.session_state.scheduler = SchedulerService(interval_minutes=1)
+        st.session_state.scheduler.start()
+    
+    # Verificar modo admin (senha do arquivo config)
+    admin_mode = False
+    with st.sidebar:
+        if st.checkbox("🔐 Modo Administrador"):
+            password = st.text_input("Senha", type="password")
+            if password == ADMIN_PASSWORD:
+                admin_mode = True
+                st.success("Modo administrador ativado")
+            elif password:
+                st.error("Senha incorreta")
     
     # Inicializar gerenciador de dados
     data_manager = DataManager()
@@ -1312,49 +1713,37 @@ def main():
     display_header()
     
     if data_manager.data is None or data_manager.data.empty:
-        st.warning("⚠️ Não foi possível carregar os dados. Verifique se o arquivo de previsões foi gerado.")
+        st.warning("⚠️ Não foi possível carregar os dados. Aguarde a próxima atualização automática.")
         
-        with st.expander("📝 Instruções para gerar dados"):
-            st.markdown("""
-            1. **Execute o script de previsões:**
-            ```bash
-            cd /workspaces/previsao_sofascore
-            python scripts/carregar_modelos.py
-            ```
-            
-            2. **Execute o reprocessamento:**
-            ```bash
-            python scripts/reprocessar_golos_com_registro_efetivo_refactor.py
-            ```
-            
-            3. **Execute a análise:**
-            ```bash
-            python scripts/tarefa7_refactor_usando_depois_previsao.py
-            ```
-            
-            4. **Execute o patch de status:**
-            ```bash
-            python scripts/patch_status_previsao.py
-            ```
-            
-            5. **Gerar dados de momentum:**
-            ```bash
-            python scripts/gerar_momentum_dados.py
-            ```
-            """)
+        if admin_mode:
+            with st.expander("📝 Informações Técnicas (Admin)"):
+                st.markdown("""
+                1. **Verificar scripts:**
+                ```bash
+                ls /workspaces/previsao_sofascore/scripts/
+                ```
+                
+                2. **Verificar dados:**
+                ```bash
+                ls /workspaces/previsao_sofascore/data/
+                ```
+                
+                3. **Logs do scheduler:**
+                Verifique os logs na seção de administrador.
+                """)
         return
     
     # Sidebar com filtros
     with st.sidebar:
-        filters = display_sidebar(data_manager)
+        filters = display_sidebar(data_manager, admin_mode=admin_mode)
     
     # Aplicar filtros
     filtered_data = apply_filters(data_manager.data, filters)
     
-    # Métricas principais
-    display_metrics_summary(filtered_data)
+    # Métricas horizontais modernas
+    display_horizontal_metrics(filtered_data)
     
-    # Controle de gráficos - CORRIGIDO: usando st.session_state diretamente
+    # Controle de gráficos
     col1, col2 = st.columns([4, 1])
     with col1:
         st.markdown(f"### 📊 Jogos Filtrados: {len(filtered_data)}")

@@ -371,11 +371,11 @@ class SchedulerService:
         
         # Scripts com seus nomes corretos
         self.scripts = [
-            ("010_collect_and_process.py", "Coleta de eventos", 600),
+            ("010_collect_and_process.py", "Coleta de eventos", 300),
             ("011_reprocess_goals.py", "Reprocessamento de gols", 300),
             ("012_criar_incidentes_estatisticas_geral.py", "Criação de incidentes", 300),
             ("020_carregar_modelos.py", "Carregamento de modelos", 300),
-            ("021_collect_and_process_depois_previsao.py", "Processamento pós-previsão", 60),
+            ("021_collect_and_process_depois_previsao.py", "Processamento pós-previsão", 300),
             ("030_reprocessar_golos_com_registro_efetivo_refactor.py", "Reprocessamento com registro", 300),
             ("031_patch_simples_tipo_status.py", "Patch de status", 300),
             ("040_analise_metricas_confianca.py", "Análise de métricas", 300),

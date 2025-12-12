@@ -38,21 +38,9 @@ st.set_page_config(
 
 # Adicionar caminho para importações
 sys.path.append(str(Path(__file__).parent.parent))
-
 # Configurações
-CONFIG_FILE = Path("/workspaces/previsao_sofascore/frontend/app/config.json")
-if CONFIG_FILE.exists():
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-    except:
-        config = {"admin_password": "admin123"}
-else:
-    config = {"admin_password": "admin123"}
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
-
-ADMIN_PASSWORD = config.get("admin_password", "admin123")
+import os
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "am1nhas1lva")
 
 # CSS customizado corrigido
 st.markdown("""

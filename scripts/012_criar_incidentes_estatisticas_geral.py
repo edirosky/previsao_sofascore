@@ -32,7 +32,7 @@ def garantir_csv_jogos(base_dir: str, jogos_filename: str, base_excel: Optional[
     return path
 
 def Criar_incidentes_estatisticas_geral(
-    base_dir: str = "/workspaces/previsao_sofascore/data",
+    base_dir: str = "/workspaces/previsao_sofascore/scripts/data",
     jogos_filename: str = "estatisticas_e_golos.csv",
     estatisticas_filename: str = "estatisticas_1st_half_playwright.csv",
     golos_filename: str = "golos_placar_ordenados_playwright.csv",

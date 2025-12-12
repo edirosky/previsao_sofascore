@@ -11,7 +11,7 @@ def Analise_metricas_confianca():
         minutos_base = 46  # @param {"type":"integer"}
         
         # Caminho fixo para o CSV mestre
-        MASTER_CSV_PATH = Path('/workspaces/previsao_sofascore/data/df_previsoes_sim_concatenado.csv')
+        MASTER_CSV_PATH = Path('/workspaces/previsao_sofascore/scripts/data/df_previsoes_sim_concatenado.csv')
         
         other_thresholds = [50, 55, 60, 65, 70, 75, 80, 85]
         thresholds = [minutos_base] + [t for t in other_thresholds if t != minutos_base]

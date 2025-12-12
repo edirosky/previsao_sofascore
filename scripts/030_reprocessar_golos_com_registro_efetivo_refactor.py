@@ -16,7 +16,7 @@ def reprocessar_golos_com_registro_efetivo_refactor():
         import re
 
         # ---------------- paths / constantes ----------------
-        ROOT = Path('/workspaces/previsao_sofascore')
+        ROOT = Path('/workspaces/previsao_sofascore/scripts')
         BASE = ROOT / 'data' / 'playwright_jsons_full'  # CORRIGIDO: adicionado /data/
         MASTER_CSV_PATH = ROOT / 'data' / 'df_previsoes_sim_concatenado.csv'
         NEW_REGISTRY_PATH = ROOT / 'golos_registro_depois_previsao_hash_filtro.json'

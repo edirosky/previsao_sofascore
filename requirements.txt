@@ -9,3 +9,4 @@ pytz
 scipy
 tqdm
 openpyxl
+plotly

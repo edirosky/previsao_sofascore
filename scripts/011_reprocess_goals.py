@@ -28,7 +28,7 @@ from tqdm.auto import tqdm
 # -------------------------
 # Config / Paths
 # -------------------------
-ROOT = Path("./data")
+ROOT = Path("./scripts/data")
 BASE = ROOT / "playwright_jsons_full"
 ROOT.mkdir(parents=True, exist_ok=True)
 BASE.mkdir(parents=True, exist_ok=True)

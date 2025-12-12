@@ -580,7 +580,7 @@ def Carregar_modelos():
     # ============================
     
     BASE_DIR = "/workspaces/previsao_sofascore"
-    DATA_DIR = os.path.join(BASE_DIR, "data")
+    DATA_DIR = os.path.join(BASE_DIR, "scripts/data")
     MODELS_DIR = os.path.join(BASE_DIR, "models")
     
     input_file = os.path.join(DATA_DIR, "incidentes_estatisticas_geral.csv")
